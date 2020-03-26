@@ -154,7 +154,7 @@ def _get_install_script(image):
     all_scripts = [x for x in os.listdir(const.VLAB_DATAIQ_IMAGES_DIR) if not x.endswith('.ova')]
     for script in all_scripts:
         if image ==  convert_name(script):
-            return script
+            return '{}/{}'.format(const.VLAB_DATAIQ_IMAGES_DIR, script)
     else:
         raise ValueError('Supplied version {} does not exist'.format(image))
 

@@ -158,7 +158,7 @@ class TestVMware(unittest.TestCase):
         fake_listdir.return_value = ['dataiq_installer_1.0.0.10_202003090706_v1.sh']
 
         script_name = vmware._get_install_script('1.0.0')
-        expected = 'dataiq_installer_1.0.0.10_202003090706_v1.sh'
+        expected = '/images/dataiq_installer_1.0.0.10_202003090706_v1.sh'
 
         self.assertEqual(script_name, expected)
 

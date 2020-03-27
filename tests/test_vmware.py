@@ -176,9 +176,10 @@ class TestVMware(unittest.TestCase):
         """``_upload_install_script`` Reads the script into RAM for uploading"""
         fake_vcenter = MagicMock()
         fake_the_vm = MagicMock()
+        fake_logger = MagicMock()
         install_script = 'dataiq_installer_1.0.0.10_202003090706_v1.sh'
 
-        vmware._upload_install_script(fake_vcenter, fake_the_vm, install_script)
+        vmware._upload_install_script(fake_vcenter, fake_the_vm, install_script, fake_logger)
 
         file_read = fake_open.call_args_list[0][0][0]
         self.assertEqual(file_read, install_script)
@@ -189,9 +190,10 @@ class TestVMware(unittest.TestCase):
         """``_upload_install_script`` Uploads the file via the PUT method"""
         fake_vcenter = MagicMock()
         fake_the_vm = MagicMock()
+        fake_logger = MagicMock()
         install_script = 'dataiq_installer_1.0.0.10_202003090706_v1.sh'
 
-        vmware._upload_install_script(fake_vcenter, fake_the_vm, install_script)
+        vmware._upload_install_script(fake_vcenter, fake_the_vm, install_script, fake_logger)
 
         self.assertTrue(fake_put.called)
 
@@ -202,12 +204,65 @@ class TestVMware(unittest.TestCase):
         fake_vcenter = MagicMock()
         fake_the_vm = MagicMock()
         fake_resp = MagicMock()
+        fake_logger = MagicMock()
         fake_put.return_value = fake_resp
         install_script = 'dataiq_installer_1.0.0.10_202003090706_v1.sh'
 
-        vmware._upload_install_script(fake_vcenter, fake_the_vm, install_script)
+        vmware._upload_install_script(fake_vcenter, fake_the_vm, install_script, fake_logger)
 
         self.assertTrue(fake_resp.raise_for_status.called)
+
+    @patch.object(vmware.time, 'sleep')
+    def test_get_upload_url(self, fake_sleep):
+        """``_get_upload_url`` retries while the VM is booting up"""
+        fake_vm = MagicMock()
+        fake_creds = MagicMock()
+        fake_upload_path = '/home/foo.sh'
+        fake_file_size = 9001
+        fake_file_attributes = MagicMock()
+        fake_vcenter = MagicMock()
+        fake_vcenter.content.guestOperationsManager.fileManager.InitiateFileTransferToGuest.side_effect = [vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           'https://some-url.org']
+        vmware._get_upload_url(fake_vcenter,
+                               fake_vm,
+                               fake_creds,
+                               fake_upload_path,
+                               fake_file_size,
+                               fake_file_attributes)
+
+        # one for every vmware.vim.fault.GuestOperationsUnavailable() side_effect
+        self.assertEqual(fake_sleep.call_count, 2)
+
+    @patch.object(vmware.time, 'sleep')
+    def test_get_upload_url(self, fake_sleep):
+        """``_get_upload_url`` Raises ValueError if the VM is never ready for the file upload"""
+        fake_vm = MagicMock()
+        fake_creds = MagicMock()
+        fake_upload_path = '/home/foo.sh'
+        fake_file_size = 9001
+        fake_file_attributes = MagicMock()
+        fake_vcenter = MagicMock()
+        fake_vcenter.content.guestOperationsManager.fileManager.InitiateFileTransferToGuest.side_effect = [vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),
+                                                                                                           vmware.vim.fault.GuestOperationsUnavailable(),]
+
+        with self.assertRaises(ValueError):
+            vmware._get_upload_url(fake_vcenter,
+                                   fake_vm,
+                                   fake_creds,
+                                   fake_upload_path,
+                                   fake_file_size,
+                                   fake_file_attributes)
+
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -5,9 +5,12 @@ import random
 import os.path
 
 import requests
+from urllib3.exceptions import InsecureRequestWarning
 from vlab_inf_common.vmware import vCenter, Ova, vim, virtual_machine, consume_task
 
 from vlab_dataiq_api.lib import const
+
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 
 def show_dataiq(username):
@@ -85,7 +88,7 @@ def create_dataiq(username, machine_name, image, network, logger):
     with vCenter(host=const.INF_VCENTER_SERVER, user=const.INF_VCENTER_USER,
                  password=const.INF_VCENTER_PASSWORD) as vcenter:
         image_name = '{}/{}'.format(const.VLAB_DATAIQ_IMAGES_DIR, const.VLAB_DATAIQ_BASE_OVA)
-        logger.info(image_name)
+        logger.info(image)
         ova = Ova(os.path.join(const.VLAB_DATAIQ_IMAGES_DIR, image_name))
         try:
             network_map = vim.OvfManager.NetworkMapping()
@@ -99,7 +102,7 @@ def create_dataiq(username, machine_name, image, network, logger):
         finally:
             ova.close()
 
-        _upload_install_script(vcenter, the_vm, install_script)
+        _upload_install_script(vcenter, the_vm, install_script, logger)
         meta_data = {'component' : "DataIQ",
                      'created' : time.time(),
                      'version' : image,
@@ -159,7 +162,7 @@ def _get_install_script(image):
         raise ValueError('Supplied version {} does not exist'.format(image))
 
 
-def _upload_install_script(vcenter, the_vm, install_script):
+def _upload_install_script(vcenter, the_vm, install_script, logger):
     """Copy the DataIQ install script onto the newly deployed virtual machine.
     Works even if the machine has no external network configured.
 
@@ -170,18 +173,72 @@ def _upload_install_script(vcenter, the_vm, install_script):
 
     :param the_vm: The new DataIQ machine
     :type the_vm: vim.VirtualMachine
+
+    :param logger: An object for logging messages
+    :type logger: logging.LoggerAdapter
     """
-    with open(install_script) as the_file:
+    logger.info("Uploading install script %s", install_script)
+    logger.debug("Reading file contents")
+    with open(install_script, 'rb') as the_file:
         script_in_ram = the_file.read()
 
+    logger.debug("Generating creds")
     creds = vim.vm.guest.NamePasswordAuthentication(username=const.VLAB_DATAIQ_ADMIN,
                                                      password=const.VLAB_DATAIQ_ADMIN_PW)
-    file_attribute = vim.vm.guest.FileManager.FileAttributes()
-    url = vcenter.content.guestOperationsManager.fileManager.InitiateFileTransferToGuest(vm=the_vm,
-                                                                                         auth=creds,
-                                                                                         guestFilePath='/home/administrator/{}'.format(install_script),
-                                                                                         fileAttributes=file_attribute,
-                                                                                         fileSize=len(script_in_ram),
-                                                                                         overwrite=True)
+    logger.debug("Creating file attributes object")
+    file_attributes = vim.vm.guest.FileManager.FileAttributes()
+    logger.debug("Obtaining URL for uploading script to new VM")
+    upload_path = '/home/administrator/{}'.format(os.path.basename(install_script))
+    logger.info('Uploading script to: %s', upload_path)
+    file_size = len(script_in_ram)
+    logger.debug('Uploading %s bytes', file_size)
+    url = _get_upload_url(vcenter=vcenter,
+                          the_vm=the_vm,
+                          creds=creds,
+                          upload_path=upload_path,
+                          file_attributes=file_attributes,
+                          file_size=file_size)
+    logger.debug('Uploading to URL %s', url)
     resp = requests.put(url, data=script_in_ram, verify=False)
     resp.raise_for_status()
+
+
+def _get_upload_url(vcenter, the_vm, creds, upload_path, file_size, file_attributes, overwrite=True):
+    """Mostly to deal with race between the VM power on, and all of VMwareTools being ready.
+
+    :Returns: String
+
+    :param vcenter: The instantiated connection to vCenter
+    :type vcenter: vlab_inf_common.vmware.vCenter
+
+    :param the_vm: The new DataIQ machine
+    :type the_vm: vim.VirtualMachine
+
+    :param creds: The username & password to use when logging into the new VM
+    :type creds: vim.vm.guest.NamePasswordAuthentication
+
+    :param file_attributes: BS that pyVmomi requires...
+    :type file_attributes: vim.vm.guest.FileManager.FileAttributes
+
+    :param file_size: How many bytes are going to be uploaded
+    :type file_size: Integer
+
+    :param overwrite: If the file already exists, write over the existing content.
+    :type overwrite: Boolean
+    """
+    # The VM just booted, this service can take some time to be ready
+    for retry_sleep in range(10):
+        try:
+            url = vcenter.content.guestOperationsManager.fileManager.InitiateFileTransferToGuest(vm=the_vm,
+                                                                                                 auth=creds,
+                                                                                                 guestFilePath=upload_path,
+                                                                                                 fileAttributes=file_attributes,
+                                                                                                 fileSize=file_size,
+                                                                                                 overwrite=overwrite)
+        except vim.fault.GuestOperationsUnavailable:
+            time.sleep(retry_sleep)
+        else:
+            return url
+    else:
+        error = 'Unable to upload DataIQ install script. Timed out waiting on GuestOperations to become available.'
+        raise ValueError(error)

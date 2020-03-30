@@ -38,7 +38,8 @@ def show(self, username, txn_id):
 
 
 @app.task(name='dataiq.create', bind=True)
-def create(self, username, machine_name, image, network, txn_id):
+def create(self, username, machine_name, image, network,static_ip, default_gateway,
+           netmask, dns, txn_id):
     """Deploy a new instance of DataIQ
 
     :Returns: Dictionary
@@ -55,6 +56,18 @@ def create(self, username, machine_name, image, network, txn_id):
     :param network: The name of the network to connect the new DataIQ instance up to
     :type network: String
 
+    :param static_ip: The IPv4 address to assign to the VM
+    :type static_ip: String
+
+    :param default_gateway: The IPv4 address of the network gateway
+    :type default_gateway: String
+
+    :param netmask: The subnet mask of the network, i.e. 255.255.255.0
+    :type netmask: String
+
+    :param dns: A list of DNS servers to use.
+    :type dns: List
+
     :param txn_id: A unique string supplied by the client to track the call through logs
     :type txn_id: String
     """
@@ -62,7 +75,15 @@ def create(self, username, machine_name, image, network, txn_id):
     resp = {'content' : {}, 'error': None, 'params': {}}
     logger.info('Task starting')
     try:
-        resp['content'] = vmware.create_dataiq(username, machine_name, image, network, logger)
+        resp['content'] = vmware.create_dataiq(username,
+                                               machine_name,
+                                               image,
+                                               network,
+                                               static_ip,
+                                               default_gateway,
+                                               netmask,
+                                               dns,
+                                               logger)
     except ValueError as doh:
         logger.error('Task failed: {}'.format(doh))
         resp['error'] = '{}'.format(doh)

@@ -64,7 +64,8 @@ def delete_dataiq(username, machine_name, logger):
             raise ValueError('No {} named {} found'.format('dataiq', machine_name))
 
 
-def create_dataiq(username, machine_name, image, network, logger):
+def create_dataiq(username, machine_name, image, network, static_ip,
+                  default_gateway, netmask, dns,logger):
     """Deploy a new instance of DataIQ
 
     :Returns: Dictionary
@@ -80,6 +81,18 @@ def create_dataiq(username, machine_name, image, network, logger):
 
     :param network: The name of the network to connect the new DataIQ instance up to
     :type network: String
+
+    :param static_ip: The IPv4 address to assign to the VM
+    :type static_ip: String
+
+    :param default_gateway: The IPv4 address of the network gateway
+    :type default_gateway: String
+
+    :param netmask: The subnet mask of the network, i.e. 255.255.255.0
+    :type netmask: String
+
+    :param dns: A list of DNS servers to use.
+    :type dns: List
 
     :param logger: An object for logging messages
     :type logger: logging.LoggerAdapter
@@ -103,6 +116,7 @@ def create_dataiq(username, machine_name, image, network, logger):
             ova.close()
 
         _upload_install_script(vcenter, the_vm, install_script, logger)
+        _config_network(vcenter, the_vm, static_ip, default_gateway, netmask, dns, logger)
         meta_data = {'component' : "DataIQ",
                      'created' : time.time(),
                      'version' : image,
@@ -180,27 +194,28 @@ def _upload_install_script(vcenter, the_vm, install_script, logger):
     logger.info("Uploading install script %s", install_script)
     logger.debug("Reading file contents")
     with open(install_script, 'rb') as the_file:
-        script_in_ram = the_file.read()
+        file_size = len(the_file.read())
+        the_file.seek(0)
 
-    logger.debug("Generating creds")
-    creds = vim.vm.guest.NamePasswordAuthentication(username=const.VLAB_DATAIQ_ADMIN,
-                                                     password=const.VLAB_DATAIQ_ADMIN_PW)
-    logger.debug("Creating file attributes object")
-    file_attributes = vim.vm.guest.FileManager.FileAttributes()
-    logger.debug("Obtaining URL for uploading script to new VM")
-    upload_path = '/home/administrator/{}'.format(os.path.basename(install_script))
-    logger.info('Uploading script to: %s', upload_path)
-    file_size = len(script_in_ram)
-    logger.debug('Uploading %s bytes', file_size)
-    url = _get_upload_url(vcenter=vcenter,
-                          the_vm=the_vm,
-                          creds=creds,
-                          upload_path=upload_path,
-                          file_attributes=file_attributes,
-                          file_size=file_size)
-    logger.debug('Uploading to URL %s', url)
-    resp = requests.put(url, data=script_in_ram, verify=False)
-    resp.raise_for_status()
+        logger.debug("Generating creds")
+        creds = vim.vm.guest.NamePasswordAuthentication(username=const.VLAB_DATAIQ_ADMIN,
+                                                         password=const.VLAB_DATAIQ_ADMIN_PW)
+        logger.debug("Creating file attributes object")
+        file_attributes = vim.vm.guest.FileManager.FileAttributes()
+        logger.debug("Obtaining URL for uploading script to new VM")
+        upload_path = '/home/administrator/{}'.format(os.path.basename(install_script))
+        logger.info('Uploading script to: %s', upload_path)
+        logger.debug('Uploading %s bytes', file_size)
+        url = _get_upload_url(vcenter=vcenter,
+                              the_vm=the_vm,
+                              creds=creds,
+                              upload_path=upload_path,
+                              file_attributes=file_attributes,
+                              file_size=file_size)
+        logger.info('Uploading to URL %s', url)
+        resp = requests.put(url, data=the_file, verify=False)
+        resp.raise_for_status()
+
 
 
 def _get_upload_url(vcenter, the_vm, creds, upload_path, file_size, file_attributes, overwrite=True):
@@ -242,3 +257,63 @@ def _get_upload_url(vcenter, the_vm, creds, upload_path, file_size, file_attribu
     else:
         error = 'Unable to upload DataIQ install script. Timed out waiting on GuestOperations to become available.'
         raise ValueError(error)
+
+
+def _config_network(vcenter, the_vm, static_ip, default_gateway, netmask, dns, logger):
+    """Configure the statis network on the VM
+
+    :Raises RuntimeError
+
+    :param vcenter: The instantiated connection to vCenter
+    :type vcenter: vlab_inf_common.vmware.vCenter
+
+    :param the_vm: The new DataIQ machine
+    :type the_vm: vim.VirtualMachine
+
+    :param static_ip: The IPv4 address to assign to the VM
+    :type static_ip: String
+
+    :param default_gateway: The IPv4 address of the network gateway
+    :type default_gateway: String
+
+    :param netmask: The subnet mask of the network, i.e. 255.255.255.0
+    :type netmask: String
+
+    :param dns: A list of DNS servers to use.
+    :type dns: List
+
+    :param logger: An object for logging messages
+    :type logger: logging.LoggerAdapter
+    """
+    nic_config_file = '/etc/sysconfig/network-scripts/ifcfg-ens192'
+    cmd = '/usr/bin/echo'
+    addr_args = 'IPADDR={} >> {}'.format(static_ip, nic_config_file)
+    gateway_args = 'GATEWAY={} >> {}'.format(default_gateway, nic_config_file)
+    netmask_args = 'NETMASK={} >> {}'.format(netmask, nic_config_file)
+
+    _run_cmd(vcenter, the_vm, cmd, addr_args, logger)
+    _run_cmd(vcenter, the_vm, cmd, gateway_args, logger)
+    _run_cmd(vcenter, the_vm, cmd, netmask_args, logger)
+    _add_dns(vcenter, the_vm, dns, nic_config_file, logger)
+    _run_cmd(vcenter, the_vm, '/bin/systemctl', 'restart network', logger)
+    _run_cmd(vcenter, the_vm, '/usr/bin/hostnamectl', 'set-hostname {}'.format(the_vm.name), logger)
+
+
+def _add_dns(vcenter, the_vm, dns, nic_config_file, logger):
+    cmd = '/usr/bin/echo'
+    for idx, dns_server in enumerate(dns):
+        args = 'DNS{}={} >> {}'.format(idx, dns_server, nic_config_file)
+        _run_cmd(vcenter, the_vm, cmd, args, logger)
+
+
+def _run_cmd(vcenter, the_vm, cmd, args, logger):
+    shell = '/usr/bin/bash'
+    the_args = "-c '{} {}'".format(cmd, args)
+    result = virtual_machine.run_command(vcenter,
+                                         the_vm,
+                                         shell,
+                                         user=const.VLAB_DATAIQ_ADMIN,
+                                         password=const.VLAB_DATAIQ_ADMIN_PW,
+                                         arguments=the_args)
+    if result.exitCode:
+        logger.error("failed to execute: {} {}".format(shell, the_args))

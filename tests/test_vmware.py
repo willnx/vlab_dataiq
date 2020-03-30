@@ -101,6 +101,10 @@ class TestVMware(unittest.TestCase):
                                        machine_name='DataIQBox',
                                        image='1.0.0',
                                        network='someLAN',
+                                       static_ip='10.7.7.2',
+                                       default_gateway='10.7.7.1',
+                                       netmask='255.255.255.0',
+                                       dns=['10.7.7.1'],
                                        logger=fake_logger)
         expected = {'myDataIQ': {'worked': True}}
 
@@ -127,6 +131,10 @@ class TestVMware(unittest.TestCase):
                                   machine_name='DataIQBox',
                                   image='1.0.0',
                                   network='someOtherLAN',
+                                  static_ip='10.7.7.2',
+                                  default_gateway='10.7.7.1',
+                                  netmask='255.255.255.0',
+                                  dns=['10.7.7.1'],
                                   logger=fake_logger)
 
     @patch.object(vmware.os, 'listdir')

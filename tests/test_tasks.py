@@ -39,6 +39,10 @@ class TestTasks(unittest.TestCase):
                               machine_name='dataiqBox',
                               image='0.0.1',
                               network='someLAN',
+                              static_ip='192.168.1.2',
+                              default_gateway='192.168.1.1',
+                              netmask='255.255.255.0',
+                              dns=['192.168.1.1'],
                               txn_id='myId')
         expected = {'content' : {'worked': True}, 'error': None, 'params': {}}
 
@@ -53,6 +57,10 @@ class TestTasks(unittest.TestCase):
                               machine_name='dataiqBox',
                               image='0.0.1',
                               network='someLAN',
+                              static_ip='192.168.1.2',
+                              default_gateway='192.168.1.1',
+                              netmask='255.255.255.0',
+                              dns=['192.168.1.1'],
                               txn_id='myId')
         expected = {'content' : {}, 'error': 'testing', 'params': {}}
 

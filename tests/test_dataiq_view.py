@@ -70,7 +70,8 @@ class TestDataIQView(unittest.TestCase):
                              headers={'X-Auth': self.token},
                              json={'network': "someLAN",
                                    'name': "myDataIQBox",
-                                   'image': "someVersion"})
+                                   'image': "someVersion",
+                                   'static-ip': '192.168.1.2'})
 
         task_id = resp.json['content']['task-id']
         expected = 'asdf-asdf-asdf'
@@ -83,12 +84,41 @@ class TestDataIQView(unittest.TestCase):
                              headers={'X-Auth': self.token},
                              json={'network': "someLAN",
                                    'name': "myDataIQBox",
-                                   'image': "someVersion"})
+                                   'image': "someVersion",
+                                   'static-ip': '192.168.1.2'})
 
         task_id = resp.headers['Link']
         expected = '<https://localhost/api/2/inf/dataiq/task/asdf-asdf-asdf>; rel=status'
 
         self.assertEqual(task_id, expected)
+
+    def test_post_bad_config(self):
+        """DataIQView - POST on /api/2/inf/dataiq returns HTTP 400 when supplied with an invalid network config"""
+        resp = self.app.post('/api/2/inf/dataiq',
+                             headers={'X-Auth': self.token},
+                             json={'network': "someLAN",
+                                   'name': "myDataIQBox",
+                                   'image': "someVersion",
+                                   'static-ip': '10.7.1.2',
+                                   'default-gateway': '192.168.1.1',
+                                   'netmask': '255.255.255.0'})
+
+        self.assertEqual(resp.status_code, 400)
+
+    def test_post_bad_config_error(self):
+        """DataIQView - POST on /api/2/inf/dataiq returns an error message when supplied with an invalid network config"""
+        resp = self.app.post('/api/2/inf/dataiq',
+                             headers={'X-Auth': self.token},
+                             json={'network': "someLAN",
+                                   'name': "myDataIQBox",
+                                   'image': "someVersion",
+                                   'static-ip': '10.7.1.2',
+                                   'default-gateway': '192.168.1.1',
+                                   'netmask': '255.255.255.0'})
+        error = resp.json['error']
+        expected = 'Static IP 10.7.1.2 is not part of network 192.168.1.0/24. Adjust your netmask and/or default gateway.'
+
+        self.assertEqual(error, expected)
 
     def test_delete_task(self):
         """DataIQView - DELETE on /api/2/inf/dataiq returns a task-id"""

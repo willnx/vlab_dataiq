@@ -1,12 +1,13 @@
 # -*- coding: UTF-8 -*-
 """
-TODO
+Defines the RESTful API for deploying/managing a DataIQ instance
 """
 import ujson
 from flask import current_app
 from flask_classy import request, route, Response
 from vlab_inf_common.views import MachineView
 from vlab_inf_common.vmware import vCenter, vim
+from vlab_inf_common.input_validators import network_config_ok
 from vlab_api_common import describe, get_logger, requires, validate_input
 
 
@@ -17,7 +18,7 @@ logger = get_logger(__name__, loglevel=const.VLAB_DATAIQ_LOG_LEVEL)
 
 
 class DataIQView(MachineView):
-    """API end point TODO"""
+    """API end point for DataIQ"""
     route_base = '/api/2/inf/dataiq'
     RESOURCE = 'dataiq'
     POST_SCHEMA = { "$schema": "http://json-schema.org/draft-04/schema#",
@@ -35,9 +36,28 @@ class DataIQView(MachineView):
                         "network": {
                             "description": "The network to hook the DataIQ instance up to",
                             "type": "string"
+                        },
+                        "static-ip": {
+                            "description": "The IPv4 address to assign to the DataIQ machine",
+                            "type": "string"
+                        },
+                        "default-gateway": {
+                            "description": "The IPv4 address of the network default gateway",
+                            "type": "string",
+                            "default": "192.168.1.1"
+                        },
+                        "netmask":  {
+                            "description": "The subnet mask for the network",
+                            "type": "string",
+                            "default": "255.255.255.0"
+                        },
+                        "dns": {
+                            "description": "The IPv4 address(es) of DNS servers",
+                            "type": "array",
+                            "default": ["192.168.1.1"]
                         }
                     },
-                    "required": ["name", "image", "network"]
+                    "required": ["name", "image", "network", "static-ip"]
                   }
     DELETE_SCHEMA = {"$schema": "http://json-schema.org/draft-04/schema#",
                      "description": "Destroy a DataIQ",
@@ -82,12 +102,32 @@ class DataIQView(MachineView):
         body = kwargs['body']
         machine_name = body['name']
         image = body['image']
+        static_ip = body['static-ip']
+        default_gateway = body.get('default-gateway', '192.168.1.1')
+        netmask = body.get('netmask', '255.255.255.0')
+        dns = body.get('dns', ['192.168.1.1'])
         network = '{}_{}'.format(username, body['network'])
-        task = current_app.celery_app.send_task('dataiq.create', [username, machine_name, image, network, txn_id])
-        resp_data['content'] = {'task-id': task.id}
-        resp = Response(ujson.dumps(resp_data))
-        resp.status_code = 202
-        resp.headers.add('Link', '<{0}{1}/task/{2}>; rel=status'.format(const.VLAB_URL, self.route_base, task.id))
+        config_error = network_config_ok(ip=static_ip,
+                                         gateway=default_gateway,
+                                         netmask=netmask)
+        if config_error:
+            resp_data['error'] = config_error
+            resp = Response(ujson.dumps(resp_data))
+            resp.status_code = 400
+        else:
+            task = current_app.celery_app.send_task('dataiq.create', [username,
+                                                                      machine_name,
+                                                                      image,
+                                                                      network,
+                                                                      static_ip,
+                                                                      default_gateway,
+                                                                      netmask,
+                                                                      dns,
+                                                                      txn_id])
+            resp_data['content'] = {'task-id': task.id}
+            resp = Response(ujson.dumps(resp_data))
+            resp.status_code = 202
+            resp.headers.add('Link', '<{0}{1}/task/{2}>; rel=status'.format(const.VLAB_URL, self.route_base, task.id))
         return resp
 
     @requires(verify=const.VLAB_VERIFY_TOKEN, version=2)

@@ -401,8 +401,9 @@ def _add_gui(vcenter, the_vm, logger):
     args1 = 'yum -y groupinstall "GNOME Desktop" "Graphical Administration Tools"'
     args2 = 'ln -sf /lib/systemd/system/runlevel5.target /etc/systemd/system/default.target'
     args3 = 'yum -y install epel-release'
+    args4 = 'systemctl disable libvirtd'
 
-    most_args = [args1, args2, args3]
+    most_args = [args1, args2, args3, args4]
     for arg in most_args:
         logger.debug("Running: %s", arg)
         _run_cmd(vcenter, the_vm, cmd, arg, logger, timeout=1800)

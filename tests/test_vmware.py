@@ -439,11 +439,24 @@ class TestVMware(unittest.TestCase):
         fake_logger = MagicMock()
 
         vmware._add_gui(fake_vcenter, fake_the_vm, fake_logger)
-        installed = fake_run_cmd.call_args_list[4][0][3]
+        installed = fake_run_cmd.call_args_list[5][0][3]
         expected = 'yum -y install xrdp tigervnc-server'
 
         self.assertEqual(installed, expected)
 
+    @patch.object(vmware, '_run_cmd')
+    @patch.object(vmware.time, 'sleep')
+    def test_add_gui_libvirtd(self, fake_sleep, fake_run_cmd):
+        """``_add_gui`` - disables libvirtd"""
+        fake_vcenter = MagicMock()
+        fake_the_vm = MagicMock()
+        fake_logger = MagicMock()
+
+        vmware._add_gui(fake_vcenter, fake_the_vm, fake_logger)
+        installed = fake_run_cmd.call_args_list[3][0][3]
+        expected = 'systemctl disable libvirtd'
+
+        self.assertEqual(installed, expected)
 
 if __name__ == '__main__':
     unittest.main()

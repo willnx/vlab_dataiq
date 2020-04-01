@@ -3,6 +3,8 @@
 import time
 import random
 import os.path
+import textwrap
+from io import BytesIO
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -65,7 +67,7 @@ def delete_dataiq(username, machine_name, logger):
 
 
 def create_dataiq(username, machine_name, image, network, static_ip,
-                  default_gateway, netmask, dns,logger):
+                  default_gateway, netmask, dns, disk_size, cpu_count, ram, logger):
     """Deploy a new instance of DataIQ
 
     :Returns: Dictionary
@@ -94,13 +96,21 @@ def create_dataiq(username, machine_name, image, network, static_ip,
     :param dns: A list of DNS servers to use.
     :type dns: List
 
+    :param disk_size: The number of GB to allocate for the DataIQ database
+    :type disk_size: Integer
+
+    :param cpu_count: Thenumber of CPU cores to allocate to the DataIQ machine
+    :type cpu_count: Integer
+
+    :param ram: The number of GB of RAM to allocate to the VM
+    :type ram: Integer
+
     :param logger: An object for logging messages
     :type logger: logging.LoggerAdapter
     """
-    install_script = _get_install_script(image)
     with vCenter(host=const.INF_VCENTER_SERVER, user=const.INF_VCENTER_USER,
                  password=const.INF_VCENTER_PASSWORD) as vcenter:
-        image_name = '{}/{}'.format(const.VLAB_DATAIQ_IMAGES_DIR, const.VLAB_DATAIQ_BASE_OVA)
+        image_name = convert_name(image)
         logger.info(image)
         ova = Ova(os.path.join(const.VLAB_DATAIQ_IMAGES_DIR, image_name))
         try:
@@ -110,19 +120,32 @@ def create_dataiq(username, machine_name, image, network, static_ip,
                 network_map.network = vcenter.networks[network]
             except KeyError:
                 raise ValueError('No such network named {}'.format(network))
-            the_vm = virtual_machine.deploy_from_ova(vcenter, ova, [network_map],
-                                                     username, machine_name, logger)
+            the_vm = virtual_machine.deploy_from_ova(vcenter=vcenter,
+                                                     ova=ova,
+                                                     network_map=[network_map],
+                                                     username=username,
+                                                     machine_name=machine_name,
+                                                     logger=logger,
+                                                     power_on=False)
         finally:
             ova.close()
-
-        _upload_install_script(vcenter, the_vm, install_script, logger)
-        _config_network(vcenter, the_vm, static_ip, default_gateway, netmask, dns, logger)
+        mb_of_ram = ram * 1024
+        virtual_machine.adjust_ram(the_vm, mb_of_ram)
+        virtual_machine.adjust_cpu(the_vm, cpu_count)
+        virtual_machine.power(the_vm, state='on')
         meta_data = {'component' : "DataIQ",
                      'created' : time.time(),
                      'version' : image,
                      'configured' : False,
                      'generation' : 1}
         virtual_machine.set_meta(the_vm, meta_data)
+        logger.info("Adding DB VMDK")
+        _add_database_disk(the_vm, disk_size)
+        logger.info("Configuring network")
+        _config_network(vcenter, the_vm, static_ip, default_gateway, netmask, dns, logger)
+        logger.info("Adding GUI")
+        _add_gui(vcenter, the_vm, logger)
+        logger.info("Acquiring machine info")
         info = virtual_machine.get_info(vcenter, the_vm, username, ensure_ip=True)
         return  {the_vm.name: info}
 
@@ -132,12 +155,12 @@ def list_images():
 
     :Returns: List
     """
-    images = [x for x in os.listdir(const.VLAB_DATAIQ_IMAGES_DIR) if not x.endswith('.ova')]
-    images = [convert_name(x) for x in images]
+    images = os.listdir(const.VLAB_DATAIQ_IMAGES_DIR)
+    images = [convert_name(x, to_version=True) for x in images]
     return images
 
 
-def convert_name(name):
+def convert_name(name, to_version=False):
     """This function centralizes converting between the name of the OVA, and the
     version of software it contains.
 
@@ -146,39 +169,18 @@ def convert_name(name):
 
     :param name: The name of the install script
     :type name: String
+
+    :param to_version: Set to True to covert the name of an OVA to the version
+    :type to_version: Boolean
     """
-    try:
-        version = name.split('_')[2]
-        if version.count('.') == 3:
-            # the build number is in the version string...
-            version = '.'.join(version.split('.')[:-1])
-    except IndexError:
-        raise ValueError('Unexpected DataIQ install script name: {}'.format(name))
-    return version
-
-
-def _get_install_script(image):
-    """Locate the install script to copy onto the new DataIQ instance. If the
-    supplied image/version does not exist, a ValueError is raised.
-
-    :Returns: String
-
-    :Raises: ValueError
-
-    :param image: The image/version of DataIQ to create
-    :type image: String
-    """
-    all_scripts = [x for x in os.listdir(const.VLAB_DATAIQ_IMAGES_DIR) if not x.endswith('.ova')]
-    for script in all_scripts:
-        if image ==  convert_name(script):
-            return '{}/{}'.format(const.VLAB_DATAIQ_IMAGES_DIR, script)
+    if to_version:
+        return name.split('-')[-1].replace('.ova', '')
     else:
-        raise ValueError('Supplied version {} does not exist'.format(image))
+        return 'dataiq-{}.ova'.format(name)
 
 
-def _upload_install_script(vcenter, the_vm, install_script, logger):
-    """Copy the DataIQ install script onto the newly deployed virtual machine.
-    Works even if the machine has no external network configured.
+def _config_network(vcenter, the_vm, static_ip, default_gateway, netmask, dns, logger):
+    """Configure the statis network on the VM
 
     :Returns: None
 
@@ -188,34 +190,115 @@ def _upload_install_script(vcenter, the_vm, install_script, logger):
     :param the_vm: The new DataIQ machine
     :type the_vm: vim.VirtualMachine
 
+    :param static_ip: The IPv4 address to assign to the VM
+    :type static_ip: String
+
+    :param default_gateway: The IPv4 address of the network gateway
+    :type default_gateway: String
+
+    :param netmask: The subnet mask of the network, i.e. 255.255.255.0
+    :type netmask: String
+
+    :param dns: A list of DNS servers to use.
+    :type dns: List
+
     :param logger: An object for logging messages
     :type logger: logging.LoggerAdapter
     """
-    logger.info("Uploading install script %s", install_script)
-    logger.debug("Reading file contents")
-    with open(install_script, 'rb') as the_file:
-        file_size = len(the_file.read())
-        the_file.seek(0)
+    nic_config_file = '/etc/sysconfig/network-scripts/ifcfg-eth0'
+    cmd = '/bin/echo'
+    config = """\
+    TYPE=Ethernet
+    ONBOOT=yes
+    BOOTPROTO=static
+    DEFROUTE=yes
+    NAME=eth0
+    DEVICE=eth0
+    IPADDR={}
+    GATEWAY={}
+    NETMASK={}
+    """.format(static_ip, default_gateway, netmask)
+    nic_config = '{}\n{}'.format(textwrap.dedent(config), _format_dns(dns))
+    _upload_nic_config(vcenter, the_vm, nic_config, os.path.basename(nic_config_file), logger)
 
-        logger.debug("Generating creds")
-        creds = vim.vm.guest.NamePasswordAuthentication(username=const.VLAB_DATAIQ_ADMIN,
-                                                         password=const.VLAB_DATAIQ_ADMIN_PW)
-        logger.debug("Creating file attributes object")
-        file_attributes = vim.vm.guest.FileManager.FileAttributes()
-        logger.debug("Obtaining URL for uploading script to new VM")
-        upload_path = '/home/administrator/{}'.format(os.path.basename(install_script))
-        logger.info('Uploading script to: %s', upload_path)
-        logger.debug('Uploading %s bytes', file_size)
-        url = _get_upload_url(vcenter=vcenter,
-                              the_vm=the_vm,
-                              creds=creds,
-                              upload_path=upload_path,
-                              file_attributes=file_attributes,
-                              file_size=file_size)
-        logger.info('Uploading to URL %s', url)
-        resp = requests.put(url, data=the_file, verify=False)
-        resp.raise_for_status()
+    _run_cmd(vcenter, the_vm, '/bin/mv', '-f /home/administrator/{} {}'.format(os.path.basename(nic_config_file), nic_config_file), logger)
+    _run_cmd(vcenter, the_vm, '/bin/systemctl', 'restart network', logger)
+    _run_cmd(vcenter, the_vm, '/bin/hostnamectl', 'set-hostname {}'.format(the_vm.name), logger)
 
+
+def _format_dns(dns):
+    """Create the DNS section of the NIC config file.
+
+    :Returns: String
+
+    :param dns: A list of DNS servers to use.
+    :type dns: List
+    """
+    tmp = []
+    for idx, dns_server in enumerate(dns):
+        server_num = idx + 1
+        dns_config = 'DNS{}={}'.format(server_num, dns_server)
+        tmp.append(dns_config)
+    return '\n'.join(tmp)
+
+
+def _run_cmd(vcenter, the_vm, cmd, args, logger, timeout=600, one_shot=False):
+    shell = '/bin/bash'
+    the_args = "-c '/bin/echo {} | /bin/sudo -S {} {}'".format(const.VLAB_DATAIQ_ADMIN_PW, cmd, args)
+    result = virtual_machine.run_command(vcenter,
+                                         the_vm,
+                                         shell,
+                                         user=const.VLAB_DATAIQ_ADMIN,
+                                         password=const.VLAB_DATAIQ_ADMIN_PW,
+                                         arguments=the_args,
+                                         timeout=timeout,
+                                         one_shot=one_shot,
+                                         init_timeout=1200)
+    if result.exitCode:
+        logger.error("failed to execute: {} {}".format(shell, the_args))
+
+
+def _upload_nic_config(vcenter, the_vm, nic_config, config_name, logger):
+    """Upload the NIC config file to the new DataIQ machine. Works even if the
+    machine has no external network configured.
+
+    :Returns: None
+
+    :param vcenter: The instantiated connection to vCenter
+    :type vcenter: vlab_inf_common.vmware.vCenter
+
+    :param the_vm: The new DataIQ machine
+    :type the_vm: vim.VirtualMachine
+
+    :param nic_config: The network configuration file contents
+    :param nic_config: String
+
+    :param config_name: The name of the config file
+    :type config_name: String
+
+    :param logger: An object for logging messages
+    :type logger: logging.LoggerAdapter
+    """
+    nic_config_bytes = nic_config.encode()
+    file_size = len(nic_config_bytes)
+    logger.debug("Generating creds")
+    creds = vim.vm.guest.NamePasswordAuthentication(username=const.VLAB_DATAIQ_ADMIN,
+                                                     password=const.VLAB_DATAIQ_ADMIN_PW)
+    logger.debug("Creating file attributes object")
+    file_attributes = vim.vm.guest.FileManager.FileAttributes()
+    logger.debug("Obtaining URL for uploading NIC config to new VM")
+    upload_path = '/home/administrator/{}'.format(config_name)
+    logger.info('Uploading NIC config: %s', upload_path)
+    logger.debug('Uploading %s bytes', file_size)
+    url = _get_upload_url(vcenter=vcenter,
+                          the_vm=the_vm,
+                          creds=creds,
+                          upload_path=upload_path,
+                          file_attributes=file_attributes,
+                          file_size=file_size)
+    logger.info('Uploading to URL %s', url)
+    resp = requests.put(url, data=BytesIO(nic_config_bytes), verify=False)
+    resp.raise_for_status()
 
 
 def _get_upload_url(vcenter, the_vm, creds, upload_path, file_size, file_attributes, overwrite=True):
@@ -259,10 +342,51 @@ def _get_upload_url(vcenter, the_vm, creds, upload_path, file_size, file_attribu
         raise ValueError(error)
 
 
-def _config_network(vcenter, the_vm, static_ip, default_gateway, netmask, dns, logger):
-    """Configure the statis network on the VM
+def _add_database_disk(the_vm, disk_size):
+    """Add a VMDK to the new DataIQ instance to store it's database.
 
-    :Raises RuntimeError
+    :Returns: None
+
+    :Rasies: RuntimeError
+
+    :param the_vm: The new DataIQ machine
+    :type the_vm: vim.VirtualMachine
+
+    :param disk_size: The number of GB to make the disk
+    :type disk_size: Integer
+    """
+    spec = vim.vm.ConfigSpec()
+    unit_number = 0
+    for dev in the_vm.config.hardware.device:
+        if hasattr(dev.backing, 'fileName'):
+            unit_number = int(dev.unitNumber) + 1
+            # unitNumber 7 is reserved for the SCSI controller
+            if unit_number == 7:
+                unit_number += 1
+            if unit_number >= 16:
+                raise RuntimeError('VM cannot have 16 VMDKs')
+    if unit_number == 0:
+        raise RuntimeError('Unable to find any VMDKs for VM')
+
+    dev_changes = []
+    disk_spec = vim.vm.device.VirtualDeviceSpec()
+    disk_spec.fileOperation = "create"
+    disk_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+    disk_spec.device = vim.vm.device.VirtualDisk()
+    disk_spec.device.backing = vim.vm.device.VirtualDisk.FlatVer2BackingInfo()
+    disk_spec.device.backing.thinProvisioned = True
+    disk_spec.device.backing.diskMode = 'persistent'
+    disk_spec.device.unitNumber = unit_number
+    disk_spec.device.capacityInKB = int(disk_size) * 1024 * 1024
+    disk_spec.device.controllerKey = 1000
+    dev_changes.append(disk_spec)
+    spec.deviceChange = dev_changes
+    consume_task(the_vm.ReconfigVM_Task(spec=spec))
+
+def _add_gui(vcenter, the_vm, logger):
+    """Adds a GUI and RDP to the DataIQ machine
+
+    :Returns: None
 
     :param vcenter: The instantiated connection to vCenter
     :type vcenter: vlab_inf_common.vmware.vCenter
@@ -270,50 +394,33 @@ def _config_network(vcenter, the_vm, static_ip, default_gateway, netmask, dns, l
     :param the_vm: The new DataIQ machine
     :type the_vm: vim.VirtualMachine
 
-    :param static_ip: The IPv4 address to assign to the VM
-    :type static_ip: String
-
-    :param default_gateway: The IPv4 address of the network gateway
-    :type default_gateway: String
-
-    :param netmask: The subnet mask of the network, i.e. 255.255.255.0
-    :type netmask: String
-
-    :param dns: A list of DNS servers to use.
-    :type dns: List
-
     :param logger: An object for logging messages
     :type logger: logging.LoggerAdapter
     """
-    nic_config_file = '/etc/sysconfig/network-scripts/ifcfg-ens192'
-    cmd = '/usr/bin/echo'
-    addr_args = 'IPADDR={} >> {}'.format(static_ip, nic_config_file)
-    gateway_args = 'GATEWAY={} >> {}'.format(default_gateway, nic_config_file)
-    netmask_args = 'NETMASK={} >> {}'.format(netmask, nic_config_file)
+    cmd = '/bin/echo {} | sudo -S'.format(const.VLAB_DATAIQ_ADMIN_PW)
+    args1 = 'yum -y groupinstall "GNOME Desktop" "Graphical Administration Tools"'
+    args2 = 'ln -sf /lib/systemd/system/runlevel5.target /etc/systemd/system/default.target'
+    args3 = 'yum -y install epel-release'
 
-    _run_cmd(vcenter, the_vm, cmd, addr_args, logger)
-    _run_cmd(vcenter, the_vm, cmd, gateway_args, logger)
-    _run_cmd(vcenter, the_vm, cmd, netmask_args, logger)
-    _add_dns(vcenter, the_vm, dns, nic_config_file, logger)
-    _run_cmd(vcenter, the_vm, '/bin/systemctl', 'restart network', logger)
-    _run_cmd(vcenter, the_vm, '/usr/bin/hostnamectl', 'set-hostname {}'.format(the_vm.name), logger)
+    most_args = [args1, args2, args3]
+    for arg in most_args:
+        logger.debug("Running: %s", arg)
+        _run_cmd(vcenter, the_vm, cmd, arg, logger, timeout=1800)
 
+    logger.info("Rebooting machine to enable GUI")
+    _run_cmd(vcenter, the_vm, 'reboot', '', logger, one_shot=True)
+    logger.info("Waiting 60 seconds for the machine to shutdown")
+    time.sleep(60)
 
-def _add_dns(vcenter, the_vm, dns, nic_config_file, logger):
-    cmd = '/usr/bin/echo'
-    for idx, dns_server in enumerate(dns):
-        args = 'DNS{}={} >> {}'.format(idx, dns_server, nic_config_file)
-        _run_cmd(vcenter, the_vm, cmd, args, logger)
-
-
-def _run_cmd(vcenter, the_vm, cmd, args, logger):
-    shell = '/usr/bin/bash'
-    the_args = "-c '{} {}'".format(cmd, args)
-    result = virtual_machine.run_command(vcenter,
-                                         the_vm,
-                                         shell,
-                                         user=const.VLAB_DATAIQ_ADMIN,
-                                         password=const.VLAB_DATAIQ_ADMIN_PW,
-                                         arguments=the_args)
-    if result.exitCode:
-        logger.error("failed to execute: {} {}".format(shell, the_args))
+    rdp_args1 = 'yum -y install xrdp tigervnc-server'
+    rdp_args2 = 'systemctl enable xrdp'
+    rdp_args3 = 'systemctl start xrdp'
+    rdp_args4 = 'firewall-cmd --permanent --add-port=3389/tcp'
+    rdp_args5 = 'firewall-cmd --reload'
+    rdp_args6 = 'chcon --type=bin_t /usr/sbin/xrdp'
+    rdp_args7 = 'chcon --type=bin_t /usr/sbin/xrdp-sesman'
+    rdp_args = [rdp_args1, rdp_args2, rdp_args3, rdp_args4, rdp_args5, rdp_args6, rdp_args7]
+    logger.info("Adding RDP server")
+    for rdp_arg in rdp_args:
+        logger.debug("Running: %s", rdp_arg)
+        _run_cmd(vcenter, the_vm, cmd, rdp_arg, logger, timeout=1800)

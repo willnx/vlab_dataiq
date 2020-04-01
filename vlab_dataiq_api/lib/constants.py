@@ -24,7 +24,6 @@ DEFINED = OrderedDict([
             ('VLAB_URL', environ.get('VLAB_URL', 'https://localhost')),
             ('VLAB_DATAIQ_IMAGES_DIR', environ.get('VLAB_DATAIQ_IMAGES_DIR', '/images')),
             ('VLAB_VERIFY_TOKEN', environ.get('VLAB_VERIFY_TOKEN', False)),
-            ('VLAB_DATAIQ_BASE_OVA', environ.get('VLAB_DATAIQ_BASE_OVA', 'BaseDataIQ.OVA')),
             ('VLAB_DATAIQ_ADMIN', environ.get('VLAB_DATAIQ_ADMIN', 'administrator')),
             ('VLAB_DATAIQ_ADMIN_PW', environ.get('VLAB_DATAIQ_ADMIN_PW', 'ChangeMe')),
           ])

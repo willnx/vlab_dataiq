@@ -43,6 +43,9 @@ class TestTasks(unittest.TestCase):
                               default_gateway='192.168.1.1',
                               netmask='255.255.255.0',
                               dns=['192.168.1.1'],
+                              disk_size=250,
+                              cpu_count=4,
+                              ram=32,
                               txn_id='myId')
         expected = {'content' : {'worked': True}, 'error': None, 'params': {}}
 
@@ -61,6 +64,9 @@ class TestTasks(unittest.TestCase):
                               default_gateway='192.168.1.1',
                               netmask='255.255.255.0',
                               dns=['192.168.1.1'],
+                              disk_size=250,
+                              cpu_count=4,
+                              ram=32,
                               txn_id='myId')
         expected = {'content' : {}, 'error': 'testing', 'params': {}}
 

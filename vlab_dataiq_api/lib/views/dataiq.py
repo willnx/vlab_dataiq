@@ -55,6 +55,24 @@ class DataIQView(MachineView):
                             "description": "The IPv4 address(es) of DNS servers",
                             "type": "array",
                             "default": ["192.168.1.1"]
+                        },
+                        "disk-size": {
+                            "description": "The number of GB for the DataIQ database disk",
+                            "type": "integer",
+                            "default": 250,
+                            "enum": [250, 500, 750]
+                        },
+                        "cpu-count": {
+                            "description": "The number of CPU cores to allocate to the VM",
+                            "type": "integer",
+                            "default": 4,
+                            "enum": [4, 8, 12]
+                        },
+                        "ram": {
+                            "description": "The number of GB of RAM to allocate to the VM",
+                            "type": "integer",
+                            "default": 32,
+                            "enum": [32, 64, 96]
                         }
                     },
                     "required": ["name", "image", "network", "static-ip"]
@@ -106,6 +124,9 @@ class DataIQView(MachineView):
         default_gateway = body.get('default-gateway', '192.168.1.1')
         netmask = body.get('netmask', '255.255.255.0')
         dns = body.get('dns', ['192.168.1.1'])
+        disk_size = body.get('disk-size', 250)
+        cpu_count = body.get('cpu-count', 4)
+        ram = body.get('ram', 32)
         network = '{}_{}'.format(username, body['network'])
         config_error = network_config_ok(ip=static_ip,
                                          gateway=default_gateway,
@@ -123,6 +144,9 @@ class DataIQView(MachineView):
                                                                       default_gateway,
                                                                       netmask,
                                                                       dns,
+                                                                      disk_size,
+                                                                      cpu_count,
+                                                                      ram,
                                                                       txn_id])
             resp_data['content'] = {'task-id': task.id}
             resp = Response(ujson.dumps(resp_data))

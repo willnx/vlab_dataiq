@@ -38,8 +38,8 @@ def show(self, username, txn_id):
 
 
 @app.task(name='dataiq.create', bind=True)
-def create(self, username, machine_name, image, network,static_ip, default_gateway,
-           netmask, dns, txn_id):
+def create(self, username, machine_name, image, network, static_ip, default_gateway,
+           netmask, dns, disk_size, cpu_count, ram, txn_id):
     """Deploy a new instance of DataIQ
 
     :Returns: Dictionary
@@ -68,6 +68,15 @@ def create(self, username, machine_name, image, network,static_ip, default_gatew
     :param dns: A list of DNS servers to use.
     :type dns: List
 
+    :param disk_size: The number of GB to allocate for the DataIQ database
+    :type disk_size: Integer
+
+    :param cpu_count: The number of CPU cores to allocate to the VM
+    :type cpu_count: Integer
+
+    :param ram: The number of GB of RAM to allocate to the VM
+    :type ram: Integer
+
     :param txn_id: A unique string supplied by the client to track the call through logs
     :type txn_id: String
     """
@@ -83,8 +92,11 @@ def create(self, username, machine_name, image, network,static_ip, default_gatew
                                                default_gateway,
                                                netmask,
                                                dns,
+                                               disk_size,
+                                               cpu_count,
+                                               ram,
                                                logger)
-    except ValueError as doh:
+    except (ValueError, RuntimeError) as doh:
         logger.error('Task failed: {}'.format(doh))
         resp['error'] = '{}'.format(doh)
     logger.info('Task complete')

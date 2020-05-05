@@ -403,7 +403,9 @@ def _add_gui(vcenter, the_vm, logger):
     args3 = 'yum -y install epel-release'
     args4 = 'systemctl disable libvirtd'
 
-    most_args = [args1, args2, args3, args4]
+    _handle_gui(vcenter, the_vm, cmd, args1, logger)
+
+    most_args = [args2, args3, args4]
     for arg in most_args:
         logger.debug("Running: %s", arg)
         _run_cmd(vcenter, the_vm, cmd, arg, logger, timeout=1800)
@@ -425,3 +427,18 @@ def _add_gui(vcenter, the_vm, logger):
     for rdp_arg in rdp_args:
         logger.debug("Running: %s", rdp_arg)
         _run_cmd(vcenter, the_vm, cmd, rdp_arg, logger, timeout=1800)
+
+
+def _handle_gui(vcenter, the_vm, cmd, arg, logger):
+    """No clue why, but PyVmomi poops the bed and loses the PID when installing
+    the GUI. So manually check if the group got installed...
+    """
+    try:
+        _run_cmd(vcenter, the_vm, cmd, arg, logger, timeout=1800)
+    except IndexError:
+        pass
+
+    check_gnome = 'group list ids | grep "Installed Environment" | grep "GNOME Desktop"'
+    check_admin_tools = 'group list ids | grep "Installed Groups" | grep "Graphfical Administration Tools"'
+    _run_cmd(vcenter, the_vm, '/bin/yum', check_gnome, logger)
+    _run_cmd(vcenter, the_vm, '/bin/yum', check_admin_tools, logger)
